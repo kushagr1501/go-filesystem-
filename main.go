@@ -16,6 +16,11 @@ var deleteMode bool
 var undoMode bool
 var historyMode bool
 
+var exportMode bool
+var exportFormat string
+
+var statusMode bool
+
 func init() {
 	flag.StringVar(&filterConfig.ExcludePattern, "exclude", "e", "Exclude files matching pattern")
 	flag.StringVar(&filterConfig.IncludePattern, "include", "i", "Include only files matching pattern")
@@ -29,6 +34,12 @@ func init() {
 	flag.BoolVar(&undoMode, "undo", false, "Undo last file deletion")
 	flag.BoolVar(&historyMode, "history", false, "Show deletion history")
 
+	//export flags
+	flag.BoolVar(&exportMode, "export", false, "Enable export of scan results")
+	flag.StringVar(&exportFormat, "export-format", "json", "Export format (json, csv)")
+
+	//status flags
+	flag.BoolVar(&statusMode, "status", false, "Show file type distribution statistics")
 }
 
 func main() {
@@ -87,10 +98,22 @@ func main() {
 		PrintError("Failed to scan: " + err.Error())
 		return
 	}
+	if exportMode {
+		handleExportMode(files, desiredpath)
+		return
+	}
 
 	scanDuration := time.Since(scanStartTime)
 
 	PrintFileCount(len(files))
+	// Check for stats mode
+	exportData, err := PrepareExportData(files, filterConfig, desiredpath)
+	if err != nil {
+		PrintError(err.Error())
+		return
+	}
+
+
 
 	fmt.Printf("\n%sPerformance Metrics:%s\n", ColorCyan+ColorBold, ColorReset)
 	fmt.Printf("  Scan Time: %s%.2f seconds%s\n",
@@ -98,7 +121,6 @@ func main() {
 		scanDuration.Seconds(),
 		ColorReset)
 	fmt.Printf("  Files Scanned: %d\n", len(files))
-
 
 	if deleteMode {
 		handleDeleteMode(files)
@@ -144,6 +166,10 @@ func main() {
 	PrintDivider()
 
 	PrintScanComplete(len(files), unusedCount, zeroByteCount)
+		if statusMode {
+		handleStatsMode(exportData.Files)
+		return
+	}
 }
 
 func handleHistoryMode() {
@@ -269,4 +295,55 @@ func handleDeleteMode(files []string) {
 
 	PrintInfo("Use --history to see deleted files")
 	PrintInfo("Use --undo to restore the last deleted file")
+}
+
+//export functions
+
+func handleExportMode(files []string, scanPath string) {
+	PrintHeader("Export Scan Results")
+
+	// Prepare export data
+	export, err := PrepareExportData(files, filterConfig, scanPath)
+	if err != nil {
+		PrintError("Failed to prepare export: " + err.Error())
+		return
+	}
+
+	timestamp := time.Now().Format("2006-01-02_15-04-05")
+	var filename string
+
+	if exportFormat == "csv" {
+		filename = fmt.Sprintf("scan-results-%s.csv", timestamp)
+		if err := ExportToCSV(export, filename); err != nil {
+			PrintError("Failed to export CSV: " + err.Error())
+			return
+		}
+	} else {
+		filename = fmt.Sprintf("scan-results-%s.json", timestamp)
+		if err := ExportToJSON(export, filename); err != nil {
+			PrintError("Failed to export JSON: " + err.Error())
+			return
+		}
+	}
+
+	PrintSuccess(fmt.Sprintf("Exported %d files to %s", len(files), filename))
+	PrintInfo("File size: " + formatFileSize(int64(len(fmt.Sprintf("%v", export)))))
+}
+
+func handleStatsMode(files []FileExport) {
+	PrintHeader("File Type Distribution")
+
+	// Calculate totals
+	grandTotal, grandSize := GetDistributionTotals(files)
+
+	if grandTotal == 0 {
+		PrintInfo("No files found matching filters")
+		return
+	}
+
+	// Calculate distribution
+	stats := GenerateStats(files)
+
+	// Display results
+	DisplayTypeDistribution(stats, grandTotal, grandSize)
 }
